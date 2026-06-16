@@ -28,13 +28,25 @@ def _png_path() -> str:
     return os.path.join(base, "assets", "icon.png")
 
 
+def _beep_alert() -> None:
+    if sys.platform != "win32":
+        return
+    try:
+        import winsound
+        for freq, dur in [(880, 120), (1100, 120), (1320, 200)]:
+            winsound.Beep(freq, dur)
+    except Exception:
+        pass
+
+
 class AppWindow:
     def __init__(self) -> None:
         self._config = AppConfig.load()
         self._stats = Stats.load()
         self._theme: Theme = get_theme(self._config.theme)
-        self._compact: bool = self._config.window.compact
         self._focus_mode: bool = False
+        self._flash_after: Optional[str] = None
+        self._flash_count: int = 0
 
         self._root = tk.Tk()
         self._root.withdraw()
@@ -66,8 +78,9 @@ class AppWindow:
         r.wm_attributes("-topmost", True)
         r.wm_attributes("-alpha", self._config.window.opacity)
         w = self._config.window.width
-        h = self._config.window.height if not self._compact else 140
+        h = self._config.window.height
         r.geometry(f"{w}x{h}")
+        r.minsize(260, 320)
         try:
             r.iconbitmap(_icon_path())
         except Exception:
@@ -101,8 +114,9 @@ class AppWindow:
         self._title_bar = tk.Frame(r, bg=t.title_bar_bg, height=36)
         self._title_bar.pack(fill="x")
         self._title_bar.pack_propagate(False)
-        self._title_bar.bind("<ButtonPress-1>", self._drag_start)
-        self._title_bar.bind("<B1-Motion>", self._drag_motion)
+        for widget in [self._title_bar]:
+            widget.bind("<ButtonPress-1>", self._drag_start)
+            widget.bind("<B1-Motion>", self._drag_motion)
 
         self._lbl_title = tk.Label(
             self._title_bar, text="🍅 Pomodoro",
@@ -119,29 +133,30 @@ class AppWindow:
             font=("Segoe UI", 11),
         )
 
-        self._btn_settings = tk.Button(
+        tk.Button(
             self._title_bar, text="⚙", fg=t.fg_secondary,
             activeforeground=t.fg, command=self._open_settings, **btn_opts
-        )
-        self._btn_settings.pack(side="right", padx=(0, 2))
+        ).pack(side="right", padx=(0, 2))
 
-        self._btn_focus_mode = tk.Button(
+        tk.Button(
             self._title_bar, text="◎", fg=t.fg_secondary,
             activeforeground=t.fg, command=self._enter_focus_mode, **btn_opts
-        )
-        self._btn_focus_mode.pack(side="right")
+        ).pack(side="right")
 
-        self._btn_minimize = tk.Button(
+        tk.Button(
             self._title_bar, text="⊟", fg=t.fg_secondary,
             activeforeground=t.fg, command=self._minimize, **btn_opts
-        )
-        self._btn_minimize.pack(side="right")
+        ).pack(side="right")
 
-        self._btn_close = tk.Button(
+        tk.Button(
             self._title_bar, text="✕", fg=t.fg_secondary,
             activeforeground=t.danger, command=self._on_close, **btn_opts
-        )
-        self._btn_close.pack(side="right")
+        ).pack(side="right")
+
+        self._resize_handle = tk.Frame(r, bg=t.border, cursor="bottom_right_corner")
+        self._resize_handle.place(relx=1.0, rely=1.0, anchor="se", width=12, height=12)
+        self._resize_handle.bind("<ButtonPress-1>", self._resize_start)
+        self._resize_handle.bind("<B1-Motion>", self._resize_motion)
 
         self._content = tk.Frame(r, bg=t.bg)
         self._content.pack(fill="both", expand=True)
@@ -154,18 +169,19 @@ class AppWindow:
 
         outer = tk.Frame(r, bg=t.bg)
         outer.pack(fill="both", expand=True)
-        outer.bind("<ButtonPress-1>", self._drag_start)
-        outer.bind("<B1-Motion>", self._drag_motion)
-        outer.bind("<Double-Button-1>", self._exit_focus_mode)
+        for w in [outer]:
+            w.bind("<ButtonPress-1>", self._drag_start)
+            w.bind("<B1-Motion>", self._drag_motion)
+            w.bind("<Double-Button-1>", self._exit_focus_mode)
 
-        ring_size = 140
         ring_frame = tk.Frame(outer, bg=t.bg)
         ring_frame.pack(expand=True)
-        ring_frame.bind("<ButtonPress-1>", self._drag_start)
-        ring_frame.bind("<B1-Motion>", self._drag_motion)
-        ring_frame.bind("<Double-Button-1>", self._exit_focus_mode)
+        for w in [ring_frame]:
+            w.bind("<ButtonPress-1>", self._drag_start)
+            w.bind("<B1-Motion>", self._drag_motion)
+            w.bind("<Double-Button-1>", self._exit_focus_mode)
 
-        self._ring = ProgressRing(ring_frame, size=ring_size, theme=t)
+        self._ring = ProgressRing(ring_frame, size=140, theme=t)
         self._ring.pack()
         self._ring.bind("<ButtonPress-1>", self._drag_start)
         self._ring.bind("<B1-Motion>", self._drag_motion)
@@ -173,21 +189,16 @@ class AppWindow:
 
         remaining = self._timer.remaining
         total = self._timer.total_seconds
-        progress = remaining / total if total > 0 else 1.0
-        self._ring.set_progress(progress, color=self._phase_color())
+        self._ring.set_progress(remaining / total if total > 0 else 1.0, color=self._phase_color())
 
         self._time_label = tk.Label(
             ring_frame, text=self._format_time(remaining),
-            bg=t.bg, fg=t.fg,
-            font=("Consolas", 20, "bold"),
+            bg=t.bg, fg=t.fg, font=("Consolas", 20, "bold"),
         )
         self._time_label.bind("<ButtonPress-1>", self._drag_start)
         self._time_label.bind("<B1-Motion>", self._drag_motion)
         self._time_label.bind("<Double-Button-1>", self._exit_focus_mode)
-
-        self._ring.after(10, lambda: self._time_label.place(
-            x=ring_size // 2, y=ring_size // 2, anchor="center"
-        ))
+        self._ring.after(10, lambda: self._time_label.place(x=70, y=70, anchor="center"))
 
         self._root.geometry(f"160x160+{self._root.winfo_x()}+{self._root.winfo_y()}")
         self._root.wm_attributes("-alpha", max(0.3, self._config.window.opacity - 0.1))
@@ -199,8 +210,7 @@ class AppWindow:
     def _exit_focus_mode(self, event=None) -> None:
         self._focus_mode = False
         self._root.wm_attributes("-alpha", self._config.window.opacity)
-        w = self._config.window.width
-        h = self._config.window.height
+        w, h = self._config.window.width, self._config.window.height
         self._root.geometry(f"{w}x{h}+{self._root.winfo_x()}+{self._root.winfo_y()}")
         self._build_ui()
 
@@ -217,34 +227,44 @@ class AppWindow:
         )
         self._phase_label.pack(pady=(10, 0))
 
-        ring_size = 80 if self._compact else 150
         self._ring_frame = tk.Frame(c, bg=t.bg)
-        self._ring_frame.pack(pady=(6, 0))
+        self._ring_frame.pack(pady=(6, 0), fill="both", expand=True)
+        self._ring_frame.bind("<Configure>", self._on_ring_frame_resize)
 
-        self._ring = ProgressRing(self._ring_frame, size=ring_size, theme=t)
-        self._ring.pack()
+        self._ring = ProgressRing(self._ring_frame, size=150, theme=t)
+        self._ring.place(relx=0.5, rely=0.5, anchor="center")
 
         remaining = self._timer.remaining
         total = self._timer.total_seconds
-        progress = remaining / total if total > 0 else 1.0
-        self._ring.set_progress(progress, color=self._phase_color())
+        self._ring.set_progress(remaining / total if total > 0 else 1.0, color=self._phase_color())
 
         self._time_label = tk.Label(
             self._ring_frame, text=self._format_time(remaining),
-            bg=t.bg, fg=t.fg,
-            font=("Consolas", 20 if not self._compact else 13, "bold"),
+            bg=t.bg, fg=t.fg, font=("Consolas", 20, "bold"),
         )
         self._time_label.place(relx=0.5, rely=0.5, anchor="center")
-        self._ring.after(10, self._sync_time_label_position)
 
-        if not self._compact:
-            self._build_duration_row(c, t)
-            self._build_stats(c, t)
-            self._build_buttons(c, t)
+        self._build_duration_row(c, t)
+        self._build_stats(c, t)
+        self._build_buttons(c, t)
+
+    def _on_ring_frame_resize(self, event: tk.Event) -> None:
+        try:
+            size = min(event.width, event.height) - 20
+            size = max(80, size)
+            self._ring.configure(width=size, height=size)
+            self._ring._size = size
+            remaining = self._timer.remaining
+            total = self._timer.total_seconds
+            self._ring.set_progress(remaining / total if total > 0 else 1.0, color=self._phase_color())
+            self._ring.place(relx=0.5, rely=0.5, anchor="center")
+            self._time_label.place(relx=0.5, rely=0.5, anchor="center")
+        except Exception:
+            pass
 
     def _build_duration_row(self, parent: tk.Frame, t: Theme) -> None:
-        frame = tk.Frame(parent, bg=t.bg)
-        frame.pack(pady=(8, 0))
+        self._dur_frame = tk.Frame(parent, bg=t.bg)
+        self._dur_frame.pack(pady=(4, 0))
 
         entry_opts = dict(
             bg=t.input_bg, fg=t.input_fg,
@@ -259,28 +279,54 @@ class AppWindow:
         )
         label_opts = dict(bg=t.bg, fg=t.fg_secondary, font=("Segoe UI", 8))
 
-        def make_field(parent, label_text: str, value: int):
-            col = tk.Frame(parent, bg=t.bg)
+        self._dur_focus_var = tk.StringVar(value=str(self._config.timer.focus_minutes))
+        self._dur_short_var = tk.StringVar(value=str(self._config.timer.short_break_minutes))
+        self._dur_long_var = tk.StringVar(value=str(self._config.timer.long_break_minutes))
+
+        self._dur_focus_var.trace_add("write", self._on_duration_change)
+        self._dur_short_var.trace_add("write", self._on_duration_change)
+        self._dur_long_var.trace_add("write", self._on_duration_change)
+
+        def make_field(label_text: str, var: tk.StringVar) -> tk.Entry:
+            col = tk.Frame(self._dur_frame, bg=t.bg)
             col.pack(side="left", padx=5)
             tk.Label(col, text=label_text, **label_opts).pack()
-            var = tk.StringVar(value=str(value))
-            entry = tk.Entry(col, textvariable=var, **entry_opts)
-            entry.pack()
-            return var
+            e = tk.Entry(col, textvariable=var, **entry_opts)
+            e.pack()
+            e.bind("<Return>", lambda ev: self._apply_inline_durations())
+            return e
 
-        self._dur_focus_var = make_field(frame, "Focus", self._config.timer.focus_minutes)
-        self._dur_short_var = make_field(frame, "Short", self._config.timer.short_break_minutes)
-        self._dur_long_var = make_field(frame, "Long", self._config.timer.long_break_minutes)
+        make_field("Focus", self._dur_focus_var)
+        make_field("Short", self._dur_short_var)
+        make_field("Long", self._dur_long_var)
 
-        apply_btn = tk.Button(
-            frame, text="✓",
+        self._apply_btn = tk.Button(
+            self._dur_frame, text="✓",
             bg=t.accent, fg=t.button_fg,
             activebackground=t.accent_hover, activeforeground=t.button_fg,
             relief="flat", font=("Segoe UI", 10, "bold"),
             padx=6, pady=2, cursor="hand2",
             command=self._apply_inline_durations,
         )
-        apply_btn.pack(side="left", padx=(6, 0), pady=(12, 0))
+
+    def _on_duration_change(self, *args) -> None:
+        try:
+            focus = int(self._dur_focus_var.get())
+            short = int(self._dur_short_var.get())
+            long_ = int(self._dur_long_var.get())
+        except ValueError:
+            self._apply_btn.pack_forget()
+            return
+
+        changed = (
+            focus != self._config.timer.focus_minutes or
+            short != self._config.timer.short_break_minutes or
+            long_ != self._config.timer.long_break_minutes
+        )
+        if changed:
+            self._apply_btn.pack(side="left", padx=(6, 0), pady=(12, 0))
+        else:
+            self._apply_btn.pack_forget()
 
     def _apply_inline_durations(self) -> None:
         try:
@@ -299,18 +345,12 @@ class AppWindow:
             focus, short, long_,
             self._config.timer.sessions_before_long_break,
         )
+        self._apply_btn.pack_forget()
         self._on_tick(self._timer.remaining)
-
-    def _sync_time_label_position(self) -> None:
-        try:
-            s = self._ring.winfo_width()
-            self._time_label.place(x=s // 2, y=s // 2, anchor="center")
-        except Exception:
-            pass
 
     def _build_stats(self, parent: tk.Frame, t: Theme) -> None:
         stats_frame = tk.Frame(parent, bg=t.bg)
-        stats_frame.pack(pady=(6, 0))
+        stats_frame.pack(pady=(4, 0))
 
         self._session_label = tk.Label(
             stats_frame,
@@ -328,13 +368,13 @@ class AppWindow:
 
     def _build_buttons(self, parent: tk.Frame, t: Theme) -> None:
         btn_frame = tk.Frame(parent, bg=t.bg)
-        btn_frame.pack(pady=(10, 0))
+        btn_frame.pack(pady=(8, 10))
 
-        btn_row1 = tk.Frame(btn_frame, bg=t.bg)
-        btn_row1.pack()
+        row1 = tk.Frame(btn_frame, bg=t.bg)
+        row1.pack()
 
         self._btn_start = tk.Button(
-            btn_row1, text="▶ Start",
+            row1, text="▶ Start",
             bg=t.accent, fg=t.button_fg,
             activebackground=t.accent_hover, activeforeground=t.button_fg,
             relief="flat", font=("Segoe UI", 10, "bold"),
@@ -344,7 +384,7 @@ class AppWindow:
         self._btn_start.pack(side="left", padx=4)
 
         self._btn_reset = tk.Button(
-            btn_row1, text="↺ Reset",
+            row1, text="↺ Reset",
             bg=t.bg_secondary, fg=t.fg,
             activebackground=t.border, activeforeground=t.fg,
             relief="flat", font=("Segoe UI", 10),
@@ -353,11 +393,11 @@ class AppWindow:
         )
         self._btn_reset.pack(side="left", padx=4)
 
-        btn_row2 = tk.Frame(btn_frame, bg=t.bg)
-        btn_row2.pack(pady=(6, 0))
+        row2 = tk.Frame(btn_frame, bg=t.bg)
+        row2.pack(pady=(6, 0))
 
         self._btn_skip = tk.Button(
-            btn_row2, text="⏭ Skip",
+            row2, text="⏭ Skip",
             bg=t.bg_tertiary, fg=t.fg,
             activebackground=t.border, activeforeground=t.fg,
             relief="flat", font=("Segoe UI", 9),
@@ -369,21 +409,19 @@ class AppWindow:
         self._update_buttons()
 
     def _phase_text(self) -> str:
-        labels = {
+        return {
             Phase.FOCUS: "FOCUS",
             Phase.SHORT_BREAK: "SHORT BREAK",
             Phase.LONG_BREAK: "LONG BREAK",
-        }
-        return labels[self._timer.phase]
+        }[self._timer.phase]
 
     def _phase_color(self) -> str:
         t = self._theme
-        colors = {
+        return {
             Phase.FOCUS: t.accent,
             Phase.SHORT_BREAK: t.accent_break,
             Phase.LONG_BREAK: t.accent_long,
-        }
-        return colors[self._timer.phase]
+        }[self._timer.phase]
 
     @staticmethod
     def _format_time(seconds: int) -> str:
@@ -393,7 +431,8 @@ class AppWindow:
     def _on_tick(self, remaining: int) -> None:
         total = self._timer.total_seconds
         progress = remaining / total if total > 0 else 0.0
-        self._ring.set_progress(progress, color=self._phase_color())
+        if not self._ring._pulsing:
+            self._ring.set_progress(progress, color=self._phase_color())
         try:
             self._time_label.configure(text=self._format_time(remaining))
         except tk.TclError:
@@ -403,16 +442,11 @@ class AppWindow:
     def _on_phase_change(self, phase: Phase) -> None:
         try:
             self._phase_label.configure(text=self._phase_text(), fg=self._phase_color())
+            self._ring.stop_pulse()
             self._ring.set_progress(1.0, color=self._phase_color())
             self._time_label.configure(text=self._format_time(self._timer.remaining))
+            self._cancel_flash()
             self._update_buttons()
-            auto = (
-                self._config.timer.auto_start_breaks and phase != Phase.FOCUS
-            ) or (
-                self._config.timer.auto_start_focus and phase == Phase.FOCUS
-            )
-            if auto and self._timer.state == TimerState.IDLE:
-                self._timer.start()
         except (tk.TclError, AttributeError):
             pass
 
@@ -421,7 +455,57 @@ class AppWindow:
             self._stats.increment(self._config.timer.focus_minutes)
             self._stats.save()
             self._update_stats_labels()
+
+        self._trigger_alert(completed_phase)
         self._update_buttons()
+
+    def _trigger_alert(self, completed_phase: Phase) -> None:
+        color = self._phase_color()
+        self._ring.start_pulse(color)
+        self._start_flash(color)
+        if self._config.notifications.sound_enabled:
+            import threading
+            threading.Thread(target=_beep_alert, daemon=True).start()
+
+    def _start_flash(self, color: str) -> None:
+        self._cancel_flash()
+        self._flash_count = 0
+        self._flash_color = color
+        self._do_flash()
+
+    def _do_flash(self) -> None:
+        if self._flash_count >= 6:
+            try:
+                self._root.configure(bg=self._theme.bg)
+                self._content.configure(bg=self._theme.bg)
+            except Exception:
+                pass
+            return
+        try:
+            if self._flash_count % 2 == 0:
+                self._root.configure(bg=self._flash_color)
+                self._content.configure(bg=self._flash_color)
+            else:
+                self._root.configure(bg=self._theme.bg)
+                self._content.configure(bg=self._theme.bg)
+        except Exception:
+            return
+        self._flash_count += 1
+        self._flash_after = self._root.after(180, self._do_flash)
+
+    def _cancel_flash(self) -> None:
+        if self._flash_after:
+            try:
+                self._root.after_cancel(self._flash_after)
+            except Exception:
+                pass
+        self._flash_after = None
+        self._flash_count = 0
+        try:
+            self._root.configure(bg=self._theme.bg)
+            self._content.configure(bg=self._theme.bg)
+        except Exception:
+            pass
 
     def _update_stats_labels(self) -> None:
         try:
@@ -438,16 +522,23 @@ class AppWindow:
         try:
             t = self._theme
             state = self._timer.state
+            phase = self._timer.phase
             if state == TimerState.RUNNING:
                 self._btn_start.configure(text="⏸ Pause", bg=t.bg_secondary, fg=t.fg)
             elif state == TimerState.PAUSED:
                 self._btn_start.configure(text="▶ Resume", bg=t.accent, fg=t.button_fg)
             else:
-                self._btn_start.configure(text="▶ Start", bg=t.accent, fg=t.button_fg)
+                label = "▶ Start" if phase == Phase.FOCUS else "▶ Start Break"
+                self._btn_start.configure(text=label, bg=t.accent, fg=t.button_fg)
+
+            skip_label = "⏭ Skip Break" if phase != Phase.FOCUS else "⏭ Skip"
+            self._btn_skip.configure(text=skip_label)
         except (tk.TclError, AttributeError):
             pass
 
     def _on_start_pause(self) -> None:
+        self._ring.stop_pulse()
+        self._cancel_flash()
         state = self._timer.state
         if state == TimerState.IDLE:
             self._timer.start()
@@ -458,12 +549,16 @@ class AppWindow:
         self._update_buttons()
 
     def _on_reset(self) -> None:
+        self._ring.stop_pulse()
+        self._cancel_flash()
         self._timer.reset()
         self._ring.set_progress(1.0, color=self._phase_color())
         self._time_label.configure(text=self._format_time(self._timer.remaining))
         self._update_buttons()
 
     def _on_skip(self) -> None:
+        self._ring.stop_pulse()
+        self._cancel_flash()
         self._timer.skip()
         self._update_buttons()
 
@@ -472,21 +567,18 @@ class AppWindow:
             self._config = cfg
             self._config.save()
             self._theme = get_theme(cfg.theme)
-            self._apply_theme()
+            self._root.configure(bg=self._theme.bg)
+            self._root.wm_attributes("-alpha", cfg.window.opacity)
             self._timer.update_durations(
                 cfg.timer.focus_minutes,
                 cfg.timer.short_break_minutes,
                 cfg.timer.long_break_minutes,
                 cfg.timer.sessions_before_long_break,
             )
-            self._root.wm_attributes("-alpha", cfg.window.opacity)
+            self._build_ui()
             self._on_tick(self._timer.remaining)
 
         SettingsDialog(self._root, self._config, self._theme, on_save)
-
-    def _apply_theme(self) -> None:
-        self._root.configure(bg=self._theme.bg)
-        self._build_ui()
 
     def _restore_position(self) -> None:
         w = self._config.window
@@ -499,8 +591,7 @@ class AppWindow:
         self._root.update_idletasks()
         sw = self._root.winfo_screenwidth()
         sh = self._root.winfo_screenheight()
-        w = self._config.window.width
-        h = self._config.window.height
+        w, h = self._config.window.width, self._config.window.height
         self._root.geometry(f"{w}x{h}+{(sw - w) // 2}+{(sh - h) // 2}")
 
     def _drag_start(self, event: tk.Event) -> None:
@@ -508,9 +599,22 @@ class AppWindow:
         self._drag_y = event.y_root - self._root.winfo_y()
 
     def _drag_motion(self, event: tk.Event) -> None:
-        x = event.x_root - self._drag_x
-        y = event.y_root - self._drag_y
-        self._root.geometry(f"+{x}+{y}")
+        self._root.geometry(f"+{event.x_root - self._drag_x}+{event.y_root - self._drag_y}")
+
+    def _resize_start(self, event: tk.Event) -> None:
+        self._resize_start_x = event.x_root
+        self._resize_start_y = event.y_root
+        self._resize_start_w = self._root.winfo_width()
+        self._resize_start_h = self._root.winfo_height()
+
+    def _resize_motion(self, event: tk.Event) -> None:
+        dw = event.x_root - self._resize_start_x
+        dh = event.y_root - self._resize_start_y
+        new_w = max(260, self._resize_start_w + dw)
+        new_h = max(320, self._resize_start_h + dh)
+        self._root.geometry(f"{new_w}x{new_h}")
+        self._config.window.width = new_w
+        self._config.window.height = new_h
 
     def _save_position(self) -> None:
         if not self._focus_mode:

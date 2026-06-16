@@ -26,6 +26,7 @@ class Theme:
     input_bg: str
     input_fg: str
     danger: str
+    flash_color: str
 
 
 THEMES: Dict[str, Theme] = {
@@ -51,6 +52,7 @@ THEMES: Dict[str, Theme] = {
         input_bg="#1e293b",
         input_fg="#e2e8f0",
         danger="#ef4444",
+        flash_color="#e85d5d",
     ),
     "light": Theme(
         name="light",
@@ -74,6 +76,31 @@ THEMES: Dict[str, Theme] = {
         input_bg="#ffffff",
         input_fg="#0f172a",
         danger="#dc2626",
+        flash_color="#dc2626",
+    ),
+    "obsidianite": Theme(
+        name="obsidianite",
+        bg="#1e1e1e",
+        bg_secondary="#252525",
+        bg_tertiary="#2d2d2d",
+        fg="#d4d4d4",
+        fg_secondary="#808080",
+        accent="#4d9de0",
+        accent_hover="#6ab0e8",
+        accent_break="#3bb273",
+        accent_long="#e15554",
+        button_bg="#4d9de0",
+        button_fg="#ffffff",
+        button_hover="#6ab0e8",
+        border="#3a3a3a",
+        progress_track="#2d2d2d",
+        progress_fill="#4d9de0",
+        title_bar_bg="#141414",
+        title_bar_fg="#d4d4d4",
+        input_bg="#2d2d2d",
+        input_fg="#d4d4d4",
+        danger="#e15554",
+        flash_color="#4d9de0",
     ),
 }
 

@@ -26,6 +26,9 @@ class ProgressRing(tk.Canvas):
         self._theme = theme
         self._progress: float = 1.0
         self._phase_color: str = theme.progress_fill
+        self._pulse_after: Optional[str] = None
+        self._pulse_step: int = 0
+        self._pulsing: bool = False
         self._draw()
 
     def set_theme(self, theme: Theme) -> None:
@@ -37,7 +40,62 @@ class ProgressRing(tk.Canvas):
         self._progress = max(0.0, min(1.0, progress))
         if color:
             self._phase_color = color
+        if not self._pulsing:
+            self._draw()
+
+    def start_pulse(self, color: str) -> None:
+        self._stop_pulse()
+        self._phase_color = color
+        self._pulsing = True
+        self._pulse_step = 0
+        self._do_pulse()
+
+    def stop_pulse(self) -> None:
+        self._stop_pulse()
         self._draw()
+
+    def _stop_pulse(self) -> None:
+        self._pulsing = False
+        if self._pulse_after:
+            try:
+                self.after_cancel(self._pulse_after)
+            except Exception:
+                pass
+        self._pulse_after = None
+
+    def _do_pulse(self) -> None:
+        if not self._pulsing:
+            return
+        self._pulse_step += 1
+        total_steps = 24
+        cycle = self._pulse_step % total_steps
+        t = cycle / total_steps
+        scale = 0.5 + 0.5 * math.sin(t * math.pi * 2)
+
+        self.delete("all")
+        th = self._theme
+        s = self._size
+        cx, cy = s / 2, s / 2
+        stroke = max(8, int(s * 0.06))
+        r = (s - stroke * 2) / 2
+
+        self.create_arc(
+            cx - r, cy - r, cx + r, cy + r,
+            start=0, extent=359.9999,
+            style="arc", outline=th.progress_track,
+            width=stroke,
+        )
+
+        glow_r = r + stroke * scale * 0.6
+        glow_w = int(stroke * (1 + scale * 0.5))
+        self.create_arc(
+            cx - glow_r, cy - glow_r, cx + glow_r, cy + glow_r,
+            start=0, extent=359.9999,
+            style="arc", outline=self._phase_color,
+            width=glow_w,
+        )
+
+        self._pulse_after = self.after(40, self._do_pulse)
 
     def _draw(self) -> None:
         self.delete("all")
